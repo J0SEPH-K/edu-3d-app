@@ -1,0 +1,52 @@
+.app-container {
+  text-align: center;
+  padding: 2rem;
+  font-family: Arial, sans-serif;
+  background-color: #111;
+  color: white;
+  height: 100vh;
+}
+
+label, select, textarea {
+  display: block;
+  margin: 1rem auto;
+  max-width: 600px;
+  width: 100%;
+}
+
+textarea {
+  resize: none;
+  padding: 10px;
+  font-size: 16px;
+}
+
+button {
+  padding: 12px 24px;
+  font-size: 16px;
+  background-color: #0ae;
+  border: none;
+  border-radius: 6px;
+  color: white;
+  cursor: pointer;
+  margin-top: 1rem;
+}
+
+button:hover {
+  background-color: #09c;
+}
+
+.preview-image {
+  max-width: 400px;
+  margin: 1rem auto;
+  display: block;
+}
+
+* {
+  scrollbar-width: none; 
+  -ms-overflow-style: none; 
+}
+
+*::-webkit-scrollbar {
+  display: none;
+}
+
