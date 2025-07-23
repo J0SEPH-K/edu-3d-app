@@ -7,27 +7,38 @@ const ChemistryViewer = ({ formula }) => {
   const viewerRef = useRef(null);
   const [cid, setCid] = useState(null);
   const gifWorker = process.env.PUBLIC_URL + "/gif.worker.js";
+  const [suggestion, setSuggestion] = useState(null);
 
   useEffect(() => {
     if (!formula) return;
 
     const timeout = setTimeout(async () => {
       let foundCid = null;
+      console.log("Searching PubChem for:", formula);
 
       try {
+        console.log("Trying name search...");
         const nameRes = await fetch(
           `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${encodeURIComponent(
             formula
           )}/cids/JSON`
         );
         if (nameRes.ok) {
-          const nameData = await nameRes.json();
-          foundCid = nameData?.IdentifierList?.CID?.[0];
+          if (nameRes.ok) {
+            const nameData = await nameRes.json();
+            foundCid = nameData?.IdentifierList?.CID?.[0];
+            if (foundCid) console.log("Found by name:", foundCid);
+          }
+
+          if (foundCid) console.log("Found by name:", foundCid);
         }
-      } catch {}
+      } catch (e) {
+        console.error("Name search error:", e);
+      }
 
       if (!foundCid) {
         try {
+          console.log("Trying autocomplete...");
           const autoRes = await fetch(
             `https://pubchem.ncbi.nlm.nih.gov/rest/autocomplete/compound/${encodeURIComponent(
               formula
@@ -37,6 +48,8 @@ const ChemistryViewer = ({ formula }) => {
             const autoData = await autoRes.json();
             const suggestion = autoData?.dictionary_terms?.compound?.[0];
             if (suggestion) {
+              console.log("Autocomplete suggestion:", suggestion);
+              setSuggestion(suggestion);
               const res = await fetch(
                 `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${encodeURIComponent(
                   suggestion
@@ -45,14 +58,18 @@ const ChemistryViewer = ({ formula }) => {
               if (res.ok) {
                 const data = await res.json();
                 foundCid = data?.IdentifierList?.CID?.[0];
+                if (foundCid) console.log("Found by suggestion:", foundCid);
               }
             }
           }
-        } catch {}
+        } catch (e) {
+          console.error("Autocomplete error:", e);
+        }
       }
 
       if (!foundCid) {
         try {
+          console.log("Trying formula search...");
           const resFormula = await fetch(
             `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/formula/${encodeURIComponent(
               formula
@@ -60,14 +77,45 @@ const ChemistryViewer = ({ formula }) => {
           );
           if (resFormula.ok) {
             const dataFormula = await resFormula.json();
-            foundCid = dataFormula?.IdentifierList?.CID?.[0];
+            const cidList = dataFormula?.IdentifierList?.CID || [];
+            console.log("Formula search CID list:", cidList);
+
+            for (const cidCandidate of cidList) {
+              try {
+                const viewRes = await fetch(
+                  `https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/${cidCandidate}/JSON`
+                );
+                if (viewRes.ok) {
+                  const viewData = await viewRes.json();
+                  const sections = viewData?.Record?.Section || [];
+
+                  const has3D = sections.some((sec) =>
+                    sec?.TOCHeading?.toLowerCase().includes("3d conformer")
+                  );
+
+                  if (has3D) {
+                    foundCid = cidCandidate;
+                    console.log("Found by formula with 3D:", foundCid);
+                    break;
+                  } else {
+                    console.log("CID", cidCandidate, "has no 3D data");
+                  }
+                }
+              } catch (e) {
+                console.error("Error checking 3D data for", cidCandidate, e);
+              }
+            }
           }
-        } catch {}
+        } catch (e) {
+          console.error("Formula search error:", e);
+        }
       }
 
       if (!foundCid) {
-        setCid("FALLBACK"); // trigger fallback useEffect
+        console.warn("No CID found. Falling back...");
+        setCid("FALLBACK");
       } else {
+        console.log("Using CID:", foundCid);
         setCid(foundCid);
       }
     }, 500);
@@ -90,10 +138,10 @@ const ChemistryViewer = ({ formula }) => {
       viewerRef.current.viewer = null;
     }
 
-    if (cid === "FALLBACK") {
+    if (cid === "FALLBACK" && (suggestion || formula)) {
       fetch(
         `https://cactus.nci.nih.gov/chemical/structure/${encodeURIComponent(
-          formula
+          suggestion || formula
         )}/sdf`
       )
         .then((res) => res.text())
@@ -109,7 +157,10 @@ const ChemistryViewer = ({ formula }) => {
           });
 
           viewer.addModel(molData, "sdf");
-          viewer.setStyle({}, { stick: {}, sphere: { scale: 0.3 } });
+          viewer.setStyle(
+            {},
+            { stick: { radius: 0.2 }, sphere: { scale: 0.3 } }
+          );
           viewer.zoomTo();
           viewer.render();
           viewer.resize();
@@ -147,35 +198,63 @@ const ChemistryViewer = ({ formula }) => {
     viewerRef.current.viewer = viewer;
 
     try {
-      $3Dmol.download(`cid:${cid}`, viewer, {}, function () {
-        if (!viewer.hasData || !viewer.hasData()) {
-          setCid("FALLBACK");
-          return;
-        }
+      fetch(
+        `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${cid}/record/SDF/?record_type=3d`
+      )
+        .then(async (res) => {
+          if (!res.ok) {
+            console.warn(
+              `PubChem 3D fetch failed with status ${res.status}. Triggering fallback...`
+            );
+            throw new Error(
+              `PubChem 3D fetch failed with status ${res.status}`
+            );
+          }
 
-        viewer.setStyle({}, { stick: {}, sphere: { scale: 0.3 } });
-        viewer.zoomTo();
-        viewer.render();
-        viewer.resize();
+          const molData = await res.text();
 
-        function rotate() {
-          if (!viewerRef.current) return;
-          viewer.rotate(0.5);
+          if (
+            !molData ||
+            molData.trim().length < 10 ||
+            molData.toLowerCase().includes("not found") ||
+            molData.toLowerCase().includes("unsupported element") ||
+            molData.toLowerCase().includes("error") ||
+            molData.match(/^[\s\n]*$/)
+          ) {
+            console.warn(
+              "PubChem 3D data invalid or empty. Triggering fallback..."
+            );
+            throw new Error("Invalid or unusable 3D data");
+          }
+
+          viewer.addModel(molData, "sdf");
+          viewer.setStyle({}, { stick: {}, sphere: { scale: 0.3 } });
+          viewer.zoomTo();
           viewer.render();
-          viewerRef.current.spinFrame = requestAnimationFrame(rotate);
-        }
-        rotate();
+          viewer.resize();
 
-        const canvas = viewerRef.current.querySelector("canvas");
-        if (canvas) {
-          canvas.style.position = "absolute";
-          canvas.style.top = 0;
-          canvas.style.left = 0;
-          canvas.style.width = "100%";
-          canvas.style.height = "100%";
-          canvas.style.display = "block";
-        }
-      });
+          function rotate() {
+            if (!viewerRef.current) return;
+            viewer.rotate(0.8);
+            viewer.render();
+            viewerRef.current.spinFrame = requestAnimationFrame(rotate);
+          }
+          rotate();
+
+          const canvas = viewerRef.current.querySelector("canvas");
+          if (canvas) {
+            canvas.style.position = "absolute";
+            canvas.style.top = 0;
+            canvas.style.left = 0;
+            canvas.style.width = "100%";
+            canvas.style.height = "100%";
+            canvas.style.display = "block";
+          }
+        })
+        .catch((err) => {
+          console.warn("Fallback triggered due to PubChem failure:", err);
+          setCid("FALLBACK");
+        });
     } catch {
       setCid("FALLBACK");
     }
