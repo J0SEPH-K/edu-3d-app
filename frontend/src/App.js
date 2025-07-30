@@ -35,15 +35,8 @@ function App() {
 
       {image && <img src={image} alt="Preview" className="preview-image" />}
 
-      <textarea
-        placeholder="Describe the object or provide context..."
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        rows={4}
-      />
-
       {subject === "chemistry" && (
-        <ChemistryViewer formula={prompt} onGifGenerated={setGifUrl} />
+        <ChemistryViewer onGifGenerated={setGifUrl} />
       )}
 
       {gifUrl && (

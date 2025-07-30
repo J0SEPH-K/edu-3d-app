@@ -3,24 +3,26 @@
 import React, { useEffect, useRef, useState } from "react";
 import * as $3Dmol from "3dmol";
 
-const ChemistryViewer = ({ formula }) => {
+const ChemistryViewer = () => {
   const viewerRef = useRef(null);
   const [cid, setCid] = useState(null);
   const gifWorker = process.env.PUBLIC_URL + "/gif.worker.js";
   const [suggestion, setSuggestion] = useState(null);
+  const [inputValue, setInputValue] = useState("");
+  const [autoSuggestions, setAutoSuggestions] = useState([]);
 
   useEffect(() => {
-    if (!formula) return;
+    const query = inputValue;
+    if (!query) return;
 
     const timeout = setTimeout(async () => {
       let foundCid = null;
-      console.log("Searching PubChem for:", formula);
 
       try {
         console.log("Trying name search...");
         const nameRes = await fetch(
           `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${encodeURIComponent(
-            formula
+            inputValue
           )}/cids/JSON`
         );
         if (nameRes.ok) {
@@ -41,7 +43,7 @@ const ChemistryViewer = ({ formula }) => {
           console.log("Trying autocomplete...");
           const autoRes = await fetch(
             `https://pubchem.ncbi.nlm.nih.gov/rest/autocomplete/compound/${encodeURIComponent(
-              formula
+              inputValue
             )}/JSON?limit=1`
           );
           if (autoRes.ok) {
@@ -72,7 +74,7 @@ const ChemistryViewer = ({ formula }) => {
           console.log("Trying formula search...");
           const resFormula = await fetch(
             `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/formula/${encodeURIComponent(
-              formula
+              inputValue
             )}/cids/JSON?list_return=flat`
           );
           if (resFormula.ok) {
@@ -121,7 +123,23 @@ const ChemistryViewer = ({ formula }) => {
     }, 500);
 
     return () => clearTimeout(timeout);
-  }, [formula]);
+  }, [inputValue]);
+
+  useEffect(() => {
+    const listener = (e) => {
+      if (e.detail) {
+        setCid(null);
+        setSuggestion(null);
+        setTimeout(() => {
+          setCid("TRIGGER"); // dummy to force rerun
+          setSuggestion(null);
+          setInputValue(e.detail);
+        }, 0);
+      }
+    };
+    window.addEventListener("triggerSearch", listener);
+    return () => window.removeEventListener("triggerSearch", listener);
+  }, []);
 
   useEffect(() => {
     if (!cid || cid === "INVALID") return;
@@ -138,10 +156,12 @@ const ChemistryViewer = ({ formula }) => {
       viewerRef.current.viewer = null;
     }
 
-    if (cid === "FALLBACK" && (suggestion || formula)) {
+    if (cid === "FALLBACK" && (suggestion || inputValue  )) {
+      console.warn("🔁 Fallback to CACTUS initiated for:", suggestion  );
       fetch(
         `https://cactus.nci.nih.gov/chemical/structure/${encodeURIComponent(
-          suggestion || formula
+          
+          suggestion || inputValue  
         )}/sdf`
       )
         .then((res) => res.text())
@@ -271,7 +291,68 @@ const ChemistryViewer = ({ formula }) => {
   return (
     <div style={{ display: "flex", justifyContent: "center", width: "100%" }}>
       <div style={{ width: "600px", minHeight: "400px" }}>
-        {cid === "INVALID" && formula && (
+        <input
+          value={inputValue}
+          onChange={async (e) => {
+            const value = e.target.value;
+            setInputValue(value);
+
+            if (value.length > 1) {
+              const res = await fetch(
+                `https://pubchem.ncbi.nlm.nih.gov/rest/autocomplete/compound/${encodeURIComponent(
+                  value
+                )}/JSON?limit=10`
+              );
+              if (res.ok) {
+                const data = await res.json();
+                setAutoSuggestions(data?.dictionary_terms?.compound || []);
+              }
+            } else {
+              setAutoSuggestions([]);
+            }
+          }}
+          placeholder="Enter chemical formula or name"
+          style={{
+            width: "100%",
+            padding: "0.5rem",
+            marginBottom: "0.5rem",
+            fontSize: "1rem",
+          }}
+        />
+        <div
+          style={{
+            maxHeight: "150px",
+            overflowY: "auto",
+            border: autoSuggestions.length ? "1px solid #ccc" : "none",
+            marginBottom: "0.5rem",
+          }}
+        >
+          {autoSuggestions.map((s) => (
+            <div
+              key={s}
+              style={{
+                padding: "0.25rem 0.5rem",
+                cursor: "pointer",
+                borderBottom: "1px solid #eee",
+              }}
+              onClick={() => {
+                setInputValue(s);
+                setAutoSuggestions([]);
+                setCid(null);
+                setSuggestion(null);
+                setTimeout(() => {
+                  window.dispatchEvent(
+                    new CustomEvent("triggerSearch", { detail: s })
+                  );
+                }, 0);
+              }}
+            >
+              {s}
+            </div>
+          ))}
+        </div>
+
+        {cid === "INVALID" && inputValue && (
           <div
             style={{
               color: "red",
@@ -322,7 +403,7 @@ const ChemistryViewer = ({ formula }) => {
                   gif.on("finished", (blob) => {
                     const a = document.createElement("a");
                     a.href = URL.createObjectURL(blob);
-                    a.download = `${formula || "molecule"}.gif`;
+                    a.download = `${inputValue || "molecule"}.gif`;
                     a.click();
                   });
                   gif.render();
